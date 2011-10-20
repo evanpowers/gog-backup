@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# Backs up installers, extras, etc. for all your GOG.com purchases.
 #
 # Copyright (C) 2011  Evan Powers
 #
@@ -14,3 +15,148 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+__author__ = 'Evan Powers'
+__version__ = '0.1'
+__url__ = 'https://github.com/evanpowers/gog-backup'
+
+import sys, os, contextlib, pprint
+import cookielib, urllib, urllib2, urlparse
+import xml.etree.ElementTree
+
+import html5lib  # http://code.google.com/p/html5lib/
+
+COOKIES = '.gog.cookies'
+MANIFEST = '.gog.games.py'
+
+LOGIN = 'https://www.gog.com/en/login'
+SHELF = 'https://www.gog.com/en/myaccount/shelf'
+LIST = 'https://www.gog.com/en/myaccount/list'
+THUMB = 'http://www.gog.com'
+
+cookiejar = cookielib.LWPCookieJar(COOKIES)
+cookieproc = urllib2.HTTPCookieProcessor(cookiejar)
+opener = urllib2.build_opener(cookieproc)
+treebuilder = html5lib.treebuilders.getTreeBuilder('etree')
+parser = html5lib.HTMLParser(tree=treebuilder, namespaceHTMLElements=False)
+
+useragent = 'gog-backup/%s (%s)' % (__version__, __url__)
+opener.addheaders = [('User-agent', useragent)]
+
+class AttrDict(dict):
+    def __init__(self, **kw):
+        self.update(kw)
+    def __getattr__(self, key):
+        return self[key]
+    def __setattr__(self, key, val):
+        self[key] = val
+
+def request(url, args=None, range=None, hide=False):
+    if not hide:
+        print '>', url
+    if args is not None:
+        args = urllib.urlencode(args)
+    req = urllib2.Request(url, data=args)
+    if range is not None:
+        req.add_header('Range', 'bytes=%d-%d' % range)
+    return contextlib.closing(opener.open(req))
+
+def authenticated():
+    for cookie in cookiejar:
+        if cookie.name == 'cu':
+            return True
+    return False
+
+def cmd_login(email, passwd):
+    with request(LOGIN, args={'log_email': email,
+                              'log_password': passwd}) as page:
+        assert page.code == 200
+    assert authenticated()
+    cookiejar.save()
+
+def cmd_manifest():
+    assert authenticated()
+    games = {}
+
+    # parse game list and available files for each from list page
+    with request(LIST) as page:
+        assert page.code == 200
+        etree = parser.parse(page)
+    for game in etree.findall(".//div[@class='tab_1_row']"):
+        gamecard = game.find(".//div[@class='tab_1_title']/a")
+        g = AttrDict()
+        g.key = gamecard.attrib['href'].split('/')[-1]
+        g.title = gamecard.text
+        g.thumb = THUMB + game.find(".//img[@src]").attrib['src']
+        g.setup, g.extra = [], []
+        for row in game.findall(".//div[@class='sh_o_i_row']"):
+            f = AttrDict()
+            f.href = row.attrib.get('onclick', '')
+            if not 'download/file' in f.href:
+                f.href = row.find(".//a").attrib['href']
+                g.setup.append(f)
+            else:
+                f.href = f.href[f.href.index("'")+1 : -1]
+                f.desc = row.find(".//div[@class='sh_o_i_text']/span").text
+                g.extra.append(f)
+        games[g.key] = g
+
+    # match games to covers on the shelf page
+    with request(SHELF) as page:
+        assert page.code == 200
+        etree = parser.parse(page)
+    for game in etree.findall(".//div[@class='shelf_item_h']"):
+        gamecard = game.find(".//div[@class='shelf_ov_tab_2_title']/a")
+        if gamecard is not None:
+            g = games[gamecard.attrib['href'].split('/')[-1]]
+            g.cover = THUMB + game.find(".//img[@src]").attrib['src']
+
+    # request a zero-length range from each file to determine
+    # - the total size (from the Content-Range header)
+    # - the target file name (from the post-redirect URL)
+    # - the chunk MD5s for setup files (from the corresponding XML)
+    for g in games.values():
+        for i, f in enumerate(g.setup + g.extra):
+            with request(f.href, range=(0, 0)) as page:
+                f.size = int(page.headers['Content-Range'].split('/')[-1])
+                f.name = urlparse.urlparse(page.geturl()).path.split('/')[-1]
+                if i < len(g.setup):
+                    f.url = page.geturl()
+        for f in g.setup:
+            with request(f.url.replace('?', '.xml?'), hide=True) as page:
+                etree = xml.etree.ElementTree.parse(page).getroot()
+            del f['url']
+            assert f.name == etree.attrib['name']
+            assert f.size == int(etree.attrib['total_size'])
+            f.md5 = etree.attrib['md5']
+            f.part = [(int(chunk.attrib['from']),
+                       int(chunk.attrib['to']),
+                       chunk.text)
+                      for chunk in etree.findall(".//chunk[@method='md5']")]
+            assert len(f.part) == int(etree.attrib['chunks'])
+            f.part.sort()
+
+    # write all this meta-data to disk
+    with open(MANIFEST, 'w') as m:
+        print >>m, '# %d games' % len(games)
+        pprint.pprint(games.values(), width=100, stream=m)
+
+def cmd_check():
+    assert authenticated()
+    with open(MANIFEST, 'r') as m:
+        games = eval(m.read())
+
+    # ...
+
+def main(args):
+    try:
+        cookiejar.load()
+    except IOError:
+        pass
+
+    globals()['cmd_' + args[0]](*args[1:])
+
+    return 0
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))
