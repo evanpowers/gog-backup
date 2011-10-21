@@ -20,7 +20,7 @@ __author__ = 'Evan Powers'
 __version__ = '0.1'
 __url__ = 'https://github.com/evanpowers/gog-backup'
 
-import sys, os, contextlib, pprint
+import sys, os, contextlib, pprint, hashlib
 import cookielib, urllib, urllib2, urlparse
 import xml.etree.ElementTree
 
@@ -73,6 +73,28 @@ def manifest():
     with open(MANIFEST, 'r') as m:
         games = m.read().replace('{', 'AttrDict(**{').replace('}', '})')
     return eval(games)
+
+def md5map(f, path):
+    print '#', path
+    H = hashlib.md5()
+    part = []
+    with open(path, 'rb') as r:
+        for start, end, md5 in f.part:
+            h = hashlib.md5()
+            n = end + 1 - start
+            r.seek(start)
+            p = r.read(n)
+            H.update(p)
+            h.update(p)
+            if len(p) != n or md5 != h.hexdigest():
+                part.append((start, end))
+    eq = f.md5 == H.hexdigest()
+    if (eq and part) or (not eq and not part):
+        # this actually happens with one of my games
+        print 'WARNING: error in chunk XML?! GOG.com must have a bug somewhere.'
+        print '    %s %s' % (f.md5, H.hexdigest())
+        print '    %r' % (part,)
+    return part
 
 def cmd_login(email, passwd):
     with request(LOGIN, args={'log_email': email,
@@ -149,6 +171,7 @@ def cmd_manifest():
         pprint.pprint(games.values(), width=100, stream=m)
 
 def cmd_compare():
+    # compare what we have to the manifest
     games = manifest()
     corrupt, missing = [], []
     for g in games:
@@ -159,15 +182,30 @@ def cmd_compare():
 
             if not os.path.isfile(path):
                 missing.append(f)
+                continue
+
+            if hasattr(f, 'part'):
+                f.need = md5map(f, path)
             elif f.size != os.path.getsize(path):
+                f.need = [(os.path.getsize(path), f.size)]
+            else:
+                f.need = []
+
+            if f.need:
                 corrupt.append(f)
 
-    def megs(lst):
-        return sum(f.size for f in lst) / 1000.0**2
+    # print a simple report
+    def need(f):
+        return sum(e + 1 - s for s, e in f.need) if f.get('need') else f.size
     for txt, lst in (('~corrupt', corrupt), ('-missing', missing)):
-        print '%d files are %s (%.1fM):' % (len(lst), txt[1:], megs(lst))
+        megs = sum(need(f) for f in lst) / 1000.0**2
+        print '%d files are %s (%.1fM):' % (len(lst), txt[1:], megs)
         for f in lst:
-            print txt[0], f.name
+            pcent = 100.0 * need(f) / f.size
+            print txt[0], f.name,
+            if pcent < 100:
+                print '\t(%.1fM, %d%%)' % (need(f) / 1000.0**2, pcent),
+            print
 
 def main(args):
     try:
