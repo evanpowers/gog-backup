@@ -26,6 +26,7 @@ import xml.etree.ElementTree
 
 import html5lib  # http://code.google.com/p/html5lib/
 
+PATHMAP = '.gog.pathmap.py'
 COOKIES = '.gog.cookies'
 MANIFEST = '.gog.games.py'
 
@@ -34,6 +35,7 @@ SHELF = 'https://www.gog.com/en/myaccount/shelf'
 LIST = 'https://www.gog.com/en/myaccount/list'
 THUMB = 'http://www.gog.com'
 
+pathmap = {}
 cookiejar = cookielib.LWPCookieJar(COOKIES)
 cookieproc = urllib2.HTTPCookieProcessor(cookiejar)
 opener = urllib2.build_opener(cookieproc)
@@ -66,6 +68,11 @@ def authenticated():
         if cookie.name == 'cu':
             return True
     return False
+
+def manifest():
+    with open(MANIFEST, 'r') as m:
+        games = m.read().replace('{', 'AttrDict(**{').replace('}', '})')
+    return eval(games)
 
 def cmd_login(email, passwd):
     with request(LOGIN, args={'log_email': email,
@@ -141,16 +148,38 @@ def cmd_manifest():
         print >>m, '# %d games' % len(games)
         pprint.pprint(games.values(), width=100, stream=m)
 
-def cmd_check():
-    assert authenticated()
-    with open(MANIFEST, 'r') as m:
-        games = eval(m.read())
+def cmd_compare():
+    games = manifest()
+    corrupt, missing = [], []
+    for g in games:
+        for f in g.setup + g.extra:
+            path = os.path.join(pathmap.get(g.key, g.key), f.name)
+            if not os.path.isfile(path):
+                path = f.name
 
-    # ...
+            if not os.path.isfile(path):
+                missing.append(f)
+            elif f.size != os.path.getsize(path):
+                corrupt.append(f)
+
+    def megs(lst):
+        return sum(f.size for f in lst) / 1000.0**2
+    for txt, lst in (('~corrupt', corrupt), ('-missing', missing)):
+        print '%d files are %s (%.1fM):' % (len(lst), txt[1:], megs(lst))
+        for f in lst:
+            print txt[0], f.name
 
 def main(args):
     try:
         cookiejar.load()
+    except IOError:
+        pass
+
+    try:
+        with open(PATHMAP, 'rU') as p:
+            for line in p:
+                k, v = line[:-1].split(None, 1)
+                pathmap[k] = v
     except IOError:
         pass
 
