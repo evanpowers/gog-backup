@@ -29,6 +29,7 @@ import html5lib  # http://code.google.com/p/html5lib/
 PATHMAP = '.gog.pathmap.py'
 COOKIES = '.gog.cookies'
 MANIFEST = '.gog.games.py'
+VALIDATED = '.gog.valid.py'
 
 LOGIN = 'https://www.gog.com/en/login'
 SHELF = 'https://www.gog.com/en/myaccount/shelf'
@@ -69,10 +70,10 @@ def authenticated():
             return True
     return False
 
-def manifest():
-    with open(MANIFEST, 'r') as m:
-        games = m.read().replace('{', 'AttrDict(**{').replace('}', '})')
-    return eval(games)
+def load_attrdicts(fn):
+    with open(fn, 'r') as r:
+        ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
+    return eval(ad)
 
 def md5map(f, path):
     print '#', path
@@ -166,45 +167,57 @@ def cmd_manifest():
             f.part.sort()
 
     # write all this meta-data to disk
-    with open(MANIFEST, 'w') as m:
-        print >>m, '# %d games' % len(games)
-        pprint.pprint(games.values(), width=100, stream=m)
+    with open(MANIFEST, 'w') as w:
+        print >>w, '# %d games' % len(games)
+        pprint.pprint(games.values(), width=100, stream=w)
 
 def cmd_compare():
     # compare what we have to the manifest
-    games = manifest()
-    corrupt, missing = [], []
+    games = load_attrdicts(MANIFEST)
+    valid, missing, corrupt = {}, [], []
     for g in games:
         for f in g.setup + g.extra:
+            k = g.key, f.name
+            u = (f.size, f.md5) if hasattr(f, 'md5') else f.size
+            v = AttrDict(key=k, uniq=u, need=[(0, f.size-1)])
+            valid[k] = v
+
+            # try to find a local copy
             path = os.path.join(pathmap.get(g.key, g.key), f.name)
             if not os.path.isfile(path):
                 path = f.name
-
             if not os.path.isfile(path):
-                missing.append(f)
+                missing.append((g, f))
                 continue
 
+            # validate the file we have
+            sz = os.path.getsize(path)
             if hasattr(f, 'part'):
-                f.need = md5map(f, path)
-            elif f.size != os.path.getsize(path):
-                f.need = [(os.path.getsize(path), f.size)]
-            else:
-                f.need = []
+                v.need = md5map(f, path)
+            elif sz < f.size:  # assume partial content isn't corrupted...
+                v.need = [(sz, f.size-1)]
+            elif sz == f.size: # ...but extra means total corruption
+                v.need = []
+            if v.need:
+                corrupt.append((g, f))
 
-            if f.need:
-                corrupt.append(f)
+    # write the validity cache to disk
+    with open(VALIDATED, 'w') as w:
+        print >>w, '# %d files' % len(valid)
+        pprint.pprint([valid[k] for k in sorted(valid)], width=100, stream=w)
 
     # print a simple report
-    def need(f):
-        return sum(e + 1 - s for s, e in f.need) if f.get('need') else f.size
+    def need(g, f):
+        v = valid[(g.key, f.name)]
+        return sum(e + 1 - s for s, e in v.need)
     for txt, lst in (('~corrupt', corrupt), ('-missing', missing)):
-        megs = sum(need(f) for f in lst) / 1000.0**2
+        megs = sum(need(g, f) for g, f in lst) / 1000.0**2
         print '%d files are %s (%.1fM):' % (len(lst), txt[1:], megs)
-        for f in lst:
-            pcent = 100.0 * need(f) / f.size
+        for g, f in lst:
+            pcent = 100.0 * need(g, f) / f.size
             print txt[0], f.name,
             if pcent < 100:
-                print '\t(%.1fM, %d%%)' % (need(f) / 1000.0**2, pcent),
+                print '\t(%.1fM, %d%%)' % (need(g, f) / 1000.0**2, pcent),
             print
 
 def main(args):
