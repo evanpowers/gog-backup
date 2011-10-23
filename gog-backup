@@ -167,6 +167,10 @@ def needed(valid, games, missing, corrupt):
                 print '\t(%s, %d%%)' % (megs(need(g, f)), pcent),
             print
 
+def open_notrunc(name, bufsize=4*1024):
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT, 0666)
+    return os.fdopen(fd, 'wb', bufsize)
+
 def cmd_login(email, passwd):
     with request(LOGIN, args={'log_email': email,
                               'log_password': passwd}) as page:
@@ -252,9 +256,10 @@ def cmd_update():
 
 def cmd_fetch():
     # start an incremental comparison
+    assert authenticated()
     valid = dict((v.key, v) for v in load_attrdicts(VALIDATED))
     _, games, _, _ = compare(valid)
-    sizes, rates = {}, {}
+    sizes, rates, errors = {}, {}, {}
 
     # build a list of work items
     work = Queue.PriorityQueue()
@@ -275,28 +280,40 @@ def cmd_fetch():
                 sz = end + 1 - start
                 sizes[path] = sz + sizes.get(path, 0)
 
-    # a download thread work loop
+    # work item I/O loop
+    def ioloop(tid, path, page, out):
+        sz, t0 = True, time.time()
+        while sz:
+            buf = page.read(4*1024)
+            t = time.time()
+            out.write(buf)
+            sz, dt, t0 = len(buf), t - t0, t
+            with lock:
+                sizes[path] -= sz
+                rates.setdefault(path, []).append((tid, (sz, dt)))
+
+    # worker thread main loop
     def worker():
         tid = threading.current_thread().ident
         while True:
             _, (f, start, end, path) = work.get()
-
-            import random
-            total = end + 1 - start
-            while total > 0:
-                bps = 10000000 * random.gauss(1, .01)
-                t = random.gauss(1, .1)
-                sz = min(int(t * bps), total)
-                t = sz / bps
-                time.sleep(t)
-                total -= sz
+            try:
+                with open_notrunc(path, 4*1024) as out:
+                    out.seek(start)
+                    se = start, end
+                    with request(f.href, range=se, hide=True) as page:
+                        hdr = page.headers['Content-Range'].split()[-1]
+                        assert hdr == '%d-%d/%d' % (start, end, f.size)
+                        assert out.tell() == start
+                        ioloop(tid, path, page, out)
+                        assert out.tell() == end + 1
+            except IOError, e:
                 with lock:
-                    sizes[path] -= sz
-                    rates.setdefault(path, []).append((tid, (sz, t)))
-
+                    print >>sys.stderr, '!', path
+                    errors.setdefault(path, []).append(e)
             work.task_done()
 
-    # a detailed progress report
+    # detailed progress report
     def progress():
         with lock:
             left = sum(sizes.values())
@@ -307,7 +324,7 @@ def cmd_fetch():
                     szs, ts = flows.get(tid, (0, 0))
                     flows[tid] = sz + szs, t + ts
                 bps = sum(szs/ts for szs, ts in flows.values())
-                print '%10s %13.1fK/s %2dx  %s' % \
+                print '%10s %8.1fK/s %2dx  %s' % \
                     (megs(sizes[path]), bps / 1000.0, len(flows), path)
             print megs(left), 'remaining'
             rates.clear()
@@ -319,8 +336,18 @@ def cmd_fetch():
         t = threading.Thread(target=worker)
         t.daemon = True
         t.start()
-    while progress():
-        time.sleep(1)
+    try:
+        while progress():
+            time.sleep(1)
+    except:
+        with lock:
+            if errors:
+                print >>sys.stderr, len(errors), 'files had errors:'
+            for path in errors:
+                print >>sys.stderr, '!', path
+                for e in errors[path]:
+                    print >>sys.stderr, '\t', e
+        raise
 
 def main(args):
     try:
