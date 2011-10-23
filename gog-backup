@@ -75,6 +75,12 @@ def load_attrdicts(fn):
         ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
     return eval(ad)
 
+def locate(g, f):
+    path = os.path.join(pathmap.get(g.key, g.key), f.name)
+    if not os.path.isfile(path) and os.path.isfile(f.name):
+        return f.name
+    return path
+
 def md5map(f, path):
     print '#', path
     H = hashlib.md5()
@@ -96,6 +102,65 @@ def md5map(f, path):
         print '    %s %s' % (f.md5, H.hexdigest())
         print '    %r' % (part,)
     return part
+
+def compare(valid):
+    # compare what we have to the manifest
+    games = load_attrdicts(MANIFEST)
+    missing, corrupt = [], []
+    for g in games:
+        for f in g.setup + g.extra:
+            k = g.key, f.name
+            u = (f.size, f.md5) if hasattr(f, 'md5') else f.size
+            v = valid.get(k)
+            if not v or v.uniq != u:
+                v = AttrDict(key=k, uniq=u, need=[(0, f.size-1)])
+                valid[k] = v
+            elif not v.need:
+                continue  # cache says we have this file
+
+            # try to find a local copy
+            path = locate(g, f)
+            if not os.path.isfile(path):
+                missing.append((g, f))
+                continue
+
+            # validate the file we have
+            sz = os.path.getsize(path)
+            if hasattr(f, 'part'):
+                v.need = md5map(f, path)
+            elif sz < f.size:
+                # assume partial content isn't corrupted...
+                v.need = [(sz, f.size-1)]
+            elif sz > f.size:
+                # ...but extra means total corruption
+                v.need = [(0, f.size-1)]
+                v.drop = True
+            else:
+                v.need = []
+            if v.need:
+                corrupt.append((g, f))
+
+    # write the validity cache to disk
+    with open(VALIDATED, 'w') as w:
+        print >>w, '# %d files' % len(valid)
+        pprint.pprint([valid[k] for k in sorted(valid)], width=100, stream=w)
+
+    return valid, games, missing, corrupt
+
+def needed(valid, games, missing, corrupt):
+    # print a simple report
+    def need(g, f):
+        v = valid[(g.key, f.name)]
+        return sum(e + 1 - s for s, e in v.need)
+    for txt, lst in (('~corrupt', corrupt), ('-missing', missing)):
+        megs = sum(need(g, f) for g, f in lst) / 1000.0**2
+        print '%d files are %s (%.1fM):' % (len(lst), txt[1:], megs)
+        for g, f in lst:
+            pcent = 100.0 * need(g, f) / f.size
+            print txt[0], f.name,
+            if pcent < 100:
+                print '\t(%.1fM, %d%%)' % (need(g, f) / 1000.0**2, pcent),
+            print
 
 def cmd_login(email, passwd):
     with request(LOGIN, args={'log_email': email,
@@ -172,53 +237,13 @@ def cmd_manifest():
         pprint.pprint(games.values(), width=100, stream=w)
 
 def cmd_compare():
-    # compare what we have to the manifest
-    games = load_attrdicts(MANIFEST)
-    valid, missing, corrupt = {}, [], []
-    for g in games:
-        for f in g.setup + g.extra:
-            k = g.key, f.name
-            u = (f.size, f.md5) if hasattr(f, 'md5') else f.size
-            v = AttrDict(key=k, uniq=u, need=[(0, f.size-1)])
-            valid[k] = v
+    # start the comparison from scratch
+    needed(*compare({}))
 
-            # try to find a local copy
-            path = os.path.join(pathmap.get(g.key, g.key), f.name)
-            if not os.path.isfile(path):
-                path = f.name
-            if not os.path.isfile(path):
-                missing.append((g, f))
-                continue
-
-            # validate the file we have
-            sz = os.path.getsize(path)
-            if hasattr(f, 'part'):
-                v.need = md5map(f, path)
-            elif sz < f.size:  # assume partial content isn't corrupted...
-                v.need = [(sz, f.size-1)]
-            elif sz == f.size: # ...but extra means total corruption
-                v.need = []
-            if v.need:
-                corrupt.append((g, f))
-
-    # write the validity cache to disk
-    with open(VALIDATED, 'w') as w:
-        print >>w, '# %d files' % len(valid)
-        pprint.pprint([valid[k] for k in sorted(valid)], width=100, stream=w)
-
-    # print a simple report
-    def need(g, f):
-        v = valid[(g.key, f.name)]
-        return sum(e + 1 - s for s, e in v.need)
-    for txt, lst in (('~corrupt', corrupt), ('-missing', missing)):
-        megs = sum(need(g, f) for g, f in lst) / 1000.0**2
-        print '%d files are %s (%.1fM):' % (len(lst), txt[1:], megs)
-        for g, f in lst:
-            pcent = 100.0 * need(g, f) / f.size
-            print txt[0], f.name,
-            if pcent < 100:
-                print '\t(%.1fM, %d%%)' % (need(g, f) / 1000.0**2, pcent),
-            print
+def cmd_update():
+    # compare only what's uncached
+    valid = dict((v.key, v) for v in load_attrdicts(VALIDATED))
+    needed(*compare(valid))
 
 def main(args):
     try:
