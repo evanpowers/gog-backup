@@ -295,7 +295,7 @@ def cmd_fetch():
     # worker thread main loop
     def worker():
         tid = threading.current_thread().ident
-        while True:
+        while not work.empty():
             _, (f, start, end, path) = work.get()
             try:
                 with open_notrunc(path, 4*1024) as out:
@@ -328,16 +328,18 @@ def cmd_fetch():
                     (megs(sizes[path]), bps / 1000.0, len(flows), path)
             print megs(left), 'remaining'
             rates.clear()
-        return left
 
     # process work items with a thread pool
     lock = threading.Lock()
+    pool = []
     for i in range(CONCURRENCY):
         t = threading.Thread(target=worker)
         t.daemon = True
         t.start()
+        pool.append(t)
     try:
-        while progress():
+        while any(t.is_alive() for t in pool):
+            progress()
             time.sleep(1)
     except:
         with lock:
