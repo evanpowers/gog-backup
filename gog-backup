@@ -23,9 +23,11 @@ __url__ = 'https://github.com/evanpowers/gog-backup'
 import sys, os, contextlib, pprint, hashlib
 import cookielib, urllib, urllib2, urlparse
 import xml.etree.ElementTree
+import threading, Queue, time
 
 import html5lib  # http://code.google.com/p/html5lib/
 
+CONCURRENCY = 6
 PATHMAP = '.gog.pathmap.py'
 COOKIES = '.gog.cookies'
 MANIFEST = '.gog.games.py'
@@ -147,19 +149,22 @@ def compare(valid):
 
     return valid, games, missing, corrupt
 
+def megs(b):
+    return '%.1fM' % (b / 1000.0**2)
+
 def needed(valid, games, missing, corrupt):
     # print a simple report
     def need(g, f):
         v = valid[(g.key, f.name)]
         return sum(e + 1 - s for s, e in v.need)
     for txt, lst in (('~corrupt', corrupt), ('-missing', missing)):
-        megs = sum(need(g, f) for g, f in lst) / 1000.0**2
-        print '%d files are %s (%.1fM):' % (len(lst), txt[1:], megs)
+        mb = megs(sum(need(g, f) for g, f in lst))
+        print '%d files are %s (%s):' % (len(lst), txt[1:], mb)
         for g, f in lst:
             pcent = 100.0 * need(g, f) / f.size
             print txt[0], f.name,
             if pcent < 100:
-                print '\t(%.1fM, %d%%)' % (need(g, f) / 1000.0**2, pcent),
+                print '\t(%s, %d%%)' % (megs(need(g, f)), pcent),
             print
 
 def cmd_login(email, passwd):
@@ -244,6 +249,78 @@ def cmd_update():
     # compare only what's uncached
     valid = dict((v.key, v) for v in load_attrdicts(VALIDATED))
     needed(*compare(valid))
+
+def cmd_fetch():
+    # start an incremental comparison
+    valid = dict((v.key, v) for v in load_attrdicts(VALIDATED))
+    _, games, _, _ = compare(valid)
+    sizes, rates = {}, {}
+
+    # build a list of work items
+    work = Queue.PriorityQueue()
+    for g in games:
+        for f in g.setup + g.extra:
+            v = valid[(g.key, f.name)]
+            path = locate(g, f)
+            dn = os.path.dirname(path)
+            if dn and not os.path.isdir(dn):
+                os.makedirs(dn)
+            if os.path.isfile(path) and v.get('drop'):
+                os.remove(path)
+            for start, end in v.need:
+                # chunks first, then small files, then large
+                prio = not hasattr(f, 'part'), end
+                args = f, start, end, path
+                work.put((prio, args))
+                sz = end + 1 - start
+                sizes[path] = sz + sizes.get(path, 0)
+
+    # a download thread work loop
+    def worker():
+        tid = threading.current_thread().ident
+        while True:
+            _, (f, start, end, path) = work.get()
+
+            import random
+            total = end + 1 - start
+            while total > 0:
+                bps = 10000000 * random.gauss(1, .01)
+                t = random.gauss(1, .1)
+                sz = min(int(t * bps), total)
+                t = sz / bps
+                time.sleep(t)
+                total -= sz
+                with lock:
+                    sizes[path] -= sz
+                    rates.setdefault(path, []).append((tid, (sz, t)))
+
+            work.task_done()
+
+    # a detailed progress report
+    def progress():
+        with lock:
+            left = sum(sizes.values())
+            print
+            for path, flowrates in sorted(rates.items()):
+                flows = {}
+                for tid, (sz, t) in flowrates:
+                    szs, ts = flows.get(tid, (0, 0))
+                    flows[tid] = sz + szs, t + ts
+                bps = sum(szs/ts for szs, ts in flows.values())
+                print '%10s %13.1fK/s %2dx  %s' % \
+                    (megs(sizes[path]), bps / 1000.0, len(flows), path)
+            print megs(left), 'remaining'
+            rates.clear()
+        return left
+
+    # process work items with a thread pool
+    lock = threading.Lock()
+    for i in range(CONCURRENCY):
+        t = threading.Thread(target=worker)
+        t.daemon = True
+        t.start()
+    while progress():
+        time.sleep(1)
 
 def main(args):
     try:
