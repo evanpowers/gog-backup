@@ -74,9 +74,12 @@ def authenticated():
     return False
 
 def load_attrdicts(fn):
-    with open(fn, 'r') as r:
-        ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
-    return eval(ad)
+    try:
+        with open(fn, 'r') as r:
+            ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
+        return eval(ad)
+    except IOError:
+        return AttrDict()
 
 def locate(g, f):
     path = os.path.join(pathmap.get(g.key, g.key), f.name)
