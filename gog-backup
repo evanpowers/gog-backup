@@ -28,6 +28,7 @@ import threading, Queue, time
 import html5lib  # http://code.google.com/p/html5lib/
 
 CONCURRENCY = 6
+BREADTHFIRST = False
 PATHMAP = '.gog.pathmap.py'
 COOKIES = '.gog.cookies'
 MANIFEST = '.gog.games.py'
@@ -263,6 +264,7 @@ def cmd_fetch():
 
     # build a list of work items
     work = Queue.PriorityQueue()
+    i = -sys.maxint
     for g in games:
         for f in g.setup + g.extra:
             v = valid[(g.key, f.name)]
@@ -272,9 +274,15 @@ def cmd_fetch():
                 os.makedirs(dn)
             if os.path.isfile(path) and v.get('drop'):
                 os.remove(path)
-            for start, end in v.need:
-                # chunks first, then small files, then large
-                prio = not hasattr(f, 'part'), end
+            i += 1
+            for j, (start, end) in enumerate(v.need, -sys.maxint):
+                # BREADTHFIRST: first chunk of all files, then second chunk...
+                # else: all chunks of first file, then of second file...
+                # ...after all chunks, extras in ascending size order
+                if hasattr(f, 'part'):
+                    prio = j if BREADTHFIRST else i
+                else:
+                    prio = end
                 args = f, start, end, path
                 work.put((prio, args))
                 sz = end + 1 - start
