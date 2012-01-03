@@ -100,7 +100,10 @@ def md5map(f, path):
             p = r.read(n)
             H.update(p)
             h.update(p)
-            if len(p) != n or md5 != h.hexdigest():
+            if len(p) < n:
+                # assume the chunk is merely incomplete
+                part.append((start + len(p), end))
+            elif md5 != h.hexdigest():
                 part.append((start, end))
     eq = f.md5 == H.hexdigest()
     if (eq and part) or (not eq and not part):
