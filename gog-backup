@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # Backs up installers, extras, etc. for all your GOG.com purchases.
 #
-# Copyright (C) 2011  Evan Powers
+# Copyright (C) 2011, 2012  Evan Powers
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -15,6 +15,28 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+"""Usage: %s [--version] [--help] <command> [<args>]
+
+Possible commands:
+
+  login <email> <password>
+    Login to GOG.com using the supplied email and password.
+
+  manifest
+    Create a manifest describing all games and extras owned by the
+    current account and including all available verification metadata.
+
+  compare
+  update
+    Verify downloaded files by comparing them against the manifest,
+    and print a report on what must be downloaded. 'compare' validates
+    everything; 'update' only validates new files.
+
+  fetch
+    Download any missing, incomplete, or corrupted files (after an
+    implicit 'update').
+"""
 
 __author__ = 'Evan Powers'
 __version__ = '0.1'
@@ -381,11 +403,26 @@ def cmd_fetch():
         raise
 
 def main(args):
+    arg0 = sys.argv[0]
+
+    # check for options
+    for opt in args:
+        if not opt.startswith('-'):
+            break
+        if opt == '--help':
+            print __doc__ % arg0
+            return 0
+        if opt == '--version':
+            print 'gog-backup version', __version__
+            return 0
+
+    # load saved cookies, if any
     try:
         cookiejar.load()
     except IOError:
         pass
 
+    # load the path map, if any
     try:
         with open(PATHMAP, 'rU') as p:
             for line in p:
@@ -394,7 +431,19 @@ def main(args):
     except IOError:
         pass
 
-    globals()['cmd_' + args[0]](*args[1:])
+    # dispatch to subcommand handler
+    try:
+        globals()['cmd_' + args[0]](*args[1:])
+    except IndexError:
+        print >>sys.stderr, '%s: missing command' % arg0
+        return 10
+    except KeyError:
+        print >>sys.stderr, '%s: invalid command %r' % (arg0, args[0])
+        return 10
+    except TypeError, e:
+        msg = e.message.replace('cmd_%s()' % args[0], repr(args[0]))
+        print >>sys.stderr, '%s: %s' % (arg0, msg)
+        return 10
 
     return 0
 
