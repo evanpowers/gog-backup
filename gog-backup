@@ -42,7 +42,7 @@ Possible commands:
 """
 
 __author__ = 'Evan Powers'
-__version__ = '0.1'
+__version__ = '1.0'
 __url__ = 'https://github.com/evanpowers/gog-backup'
 
 import sys, os, contextlib, pprint, hashlib, zipfile
