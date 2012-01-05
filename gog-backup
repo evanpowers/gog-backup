@@ -55,7 +55,7 @@ import html5lib  # http://code.google.com/p/html5lib/
 CONCURRENCY = 6
 BREADTHFIRST = False
 FETCHCOVERS = False
-PATHMAP = '.gog.pathmap.py'
+PATHMAP = '.gog.pathmap.txt'
 COOKIES = '.gog.cookies'
 MANIFEST = '.gog.games.py'
 VALIDATED = '.gog.valid.py'
