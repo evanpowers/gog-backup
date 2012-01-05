@@ -45,7 +45,7 @@ __author__ = 'Evan Powers'
 __version__ = '0.1'
 __url__ = 'https://github.com/evanpowers/gog-backup'
 
-import sys, os, contextlib, pprint, hashlib
+import sys, os, contextlib, pprint, hashlib, zipfile
 import cookielib, urllib, urllib2, urlparse
 import xml.etree.ElementTree
 import threading, Queue, time
@@ -141,6 +141,14 @@ def md5map(f, path):
         print '    %r' % (part,)
     return part
 
+def zipmap(f, path):
+    print '&', path
+    part = []
+    with zipfile.ZipFile(path, 'r') as r:
+        if r.testzip() is not None:
+            part = [(0, f.size-1)]
+    return part
+
 def compare(valid):
     # compare what we have to the manifest
     games = load_attrdicts(MANIFEST)
@@ -173,6 +181,9 @@ def compare(valid):
                 # ...but extra means total corruption
                 v.need = [(0, f.size-1)]
                 v.drop = True
+            elif path.endswith('.zip'):
+                # don't need metadata to validate a .zip
+                v.need = zipmap(f, path)
             else:
                 v.need = []
             if v.need:
