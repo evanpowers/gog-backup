@@ -52,6 +52,7 @@ import threading, Queue, time
 
 import html5lib  # http://code.google.com/p/html5lib/
 
+BACKUPINTO = '.'
 CONCURRENCY = 6
 BREADTHFIRST = False
 FETCHCOVERS = False
@@ -432,6 +433,8 @@ def main(args):
         if opt == '--version':
             print 'gog-backup version', __version__
             return 0
+
+    os.chdir(BACKUPINTO)
 
     # load saved cookies, if any
     try:
