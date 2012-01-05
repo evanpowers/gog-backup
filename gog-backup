@@ -27,6 +27,9 @@ Possible commands:
     Create a manifest describing all games and extras owned by the
     current account and including all available verification metadata.
 
+  list
+    Print a summary of the current manifest.
+
   compare
   update
     Verify downloaded files by comparing them against the manifest,
@@ -288,6 +291,20 @@ def cmd_manifest():
         for g in games.values():
             fetch('cover', g)
             fetch('thumb', g)
+
+def cmd_list():
+    # summarize the manifest
+    games = load_attrdicts(MANIFEST)
+    valid = dict((v.key, v) for v in load_attrdicts(VALIDATED))
+    total = 0
+    for g in sorted(games, key=lambda g: g.key):
+        ssz = sum(f.size for f in g.setup)
+        esz = sum(f.size for f in g.extra)
+        total += ssz + esz
+        print '%s (%s)' % (g.key, g.title)
+        print '    %8s in %d setup files' % (megs(ssz), len(g.setup))
+        print '    %8s in %d extras' % (megs(esz), len(g.extra))
+    print '%d games, a total of %s' % (len(games), megs(total))
 
 def cmd_compare():
     # start the comparison from scratch
