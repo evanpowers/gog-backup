@@ -86,19 +86,21 @@ class AttrDict(dict):
 
 def request(url, args=None, range=None, hide=False):
     if not hide:
-        print '>', url
+        print '>', url,
+        sys.stdout.flush()
     if args is not None:
         args = urllib.urlencode(args)
     req = urllib2.Request(url, data=args)
     if range is not None:
         req.add_header('Range', 'bytes=%d-%d' % range)
-    return contextlib.closing(opener.open(req))
-
-def authenticated():
-    for cookie in cookiejar:
-        if cookie.name == 'cu':
-            return True
-    return False
+    page = opener.open(req)
+    if not hide:
+        print '[%d]' % page.getcode()
+    assert 200 <= page.getcode() < 300
+    if page.geturl().endswith('/login') and url != LOGIN:
+        # must have been redirected to a login page
+        raise RuntimeError('login required')
+    return contextlib.closing(page)
 
 def load_attrdicts(fn):
     try:
@@ -208,17 +210,19 @@ def open_notrunc(name, bufsize=4*1024):
 def cmd_login(email, passwd):
     with request(LOGIN, args={'log_email': email,
                               'log_password': passwd}) as page:
-        assert page.code == 200
-    assert authenticated()
+        pass
+    for cookie in cookiejar:
+        if cookie.name == 'cu':
+            break
+    else:
+        raise RuntimeError('login failed')
     cookiejar.save()
 
 def cmd_manifest():
-    assert authenticated()
     games = {}
 
     # parse game list and available files for each from list page
     with request(LIST) as page:
-        assert page.code == 200
         etree = parser.parse(page)
     for game in etree.findall(".//div[@class='tab_1_row']"):
         gamecard = game.find(".//div[@class='tab_1_title']/a")
@@ -241,7 +245,6 @@ def cmd_manifest():
 
     # match games to covers on the shelf page
     with request(SHELF) as page:
-        assert page.code == 200
         etree = parser.parse(page)
     for game in etree.findall(".//div[@class='shelf_item_h']"):
         gamecard = game.find(".//div[@class='shelf_ov_tab_2_title']/a")
@@ -318,7 +321,6 @@ def cmd_update():
 
 def cmd_fetch():
     # start an incremental comparison
-    assert authenticated()
     valid = dict((v.key, v) for v in load_attrdicts(VALIDATED))
     _, games, _, _ = compare(valid)
     sizes, rates, errors = {}, {}, {}
@@ -464,6 +466,9 @@ def main(args):
         msg = e.message.replace('cmd_%s()' % args[0], repr(args[0]))
         print >>sys.stderr, '%s: %s' % (arg0, msg)
         return 10
+    except RuntimeError, e:
+        print >>sys.stderr, '%s: %s' % (arg0, e.message)
+        return 1
 
     return 0
 
