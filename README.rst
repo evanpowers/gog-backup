@@ -71,12 +71,11 @@ Features
 Installation
 ------------
 
-Obtain the ``gog-backup`` script directly from its GitHub page,
-https://github.com/evanpowers/gog-backup. There are exactly two
-dependencies:
+Obtain the ``gog-backup`` script directly from its GitHub page
+[1]_. There are exactly two dependencies:
 
 1. Python 2.6 or compatible, unless I'm wrong and it actually requires 2.7
-2. html5lib, tested with 0.90; see http://code.google.com/p/html5lib/
+2. html5lib [2]_, tested with 0.90
 
 If you're a Python developer,
 
@@ -207,6 +206,9 @@ patch that fixes the problem. If there's a feature you think is
 missing, feel free to implement it and send me a pull request. Known
 bugs and limitations include:
 
+* Connection timeouts during manifest creation aren't handled, which
+  makes large game collections problematic during peak hours.
+
 * Files which are corrupt, truncated, *and* lack XML metadata cannot
   be distinguished from partial downloads. As a consequence, they'll
   be "resumed". Since only extras lack XML metadata, and extras are
@@ -220,7 +222,24 @@ bugs and limitations include:
   be unable to detect this.
 
 * Passing the account password on the command line is a classic
-  security flaw on multi-user machines.
+  security flaw on multi-user machines—users can see each other's
+  processes, and the command lines used to invoke those processes.
+
+
+Alternatives
+------------
+
+``gog-backup`` is but one of several unofficial GOG.com downloaders;
+if it doesn't meet your needs, perhaps one of the others will. You can
+find a feature comparison at [3]_.
+
+
+References
+----------
+
+.. [1] https://github.com/evanpowers/gog-backup
+.. [2] http://code.google.com/p/html5lib/
+.. [3] https://github.com/evanpowers/gog-backup/wiki/Comparison
 
 
 .. Typeset Documentation
