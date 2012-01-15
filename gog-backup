@@ -135,10 +135,11 @@ def md5map(f, path):
                 part.append((start, end))
     eq = f.md5 == H.hexdigest()
     if (eq and part) or (not eq and not part):
-        # this actually happens with one of my games
-        print 'WARNING: error in chunk XML?! GOG.com must have a bug somewhere.'
-        print '    %s %s' % (f.md5, H.hexdigest())
-        print '    %r' % (part,)
+        # happens with "The Witcher: Enhanced Edition"
+        print 'WARNING: error in chunk XML for %s?!' % (f.name,)
+        print '    GOG.com must have a bug somewhere.'
+        print '    %s != %s' % (f.md5, H.hexdigest())
+        print '    bad chunks: %r' % (part,)
     return part
 
 def zipmap(f, path):
@@ -235,6 +236,12 @@ def cmd_manifest():
         etree = parser.parse(page)
     for game in etree.findall(".//div[@class='tab_1_row']"):
         gamecard = game.find(".//div[@class='tab_1_title']/a")
+        if gamecard is None:
+            # happens with "Colin McRae Rally 2005", among others
+            g = game.find(".//div[@class='tab_1_title']/span")
+            print 'WARNING: no gamecard link for %s?!' % (g.text,)
+            print '    Did GOG.com stop selling this game?'
+            continue
         g = AttrDict()
         g.key = gamecard.attrib['href'].split('/')[-1]
         g.title = gamecard.text
