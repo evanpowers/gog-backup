@@ -411,7 +411,7 @@ def cmd_fetch():
                 for tid, (sz, t) in flowrates:
                     szs, ts = flows.get(tid, (0, 0))
                     flows[tid] = sz + szs, t + ts
-                bps = sum(szs/ts for szs, ts in flows.values())
+                bps = sum(szs/ts for szs, ts in flows.values() if ts > 0)
                 print '%10s %8.1fK/s %2dx  %s' % \
                     (megs(sizes[path]), bps / 1000.0, len(flows), path)
             print megs(left), 'remaining'
