@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
 # Backs up installers, extras, etc. for all your GOG.com purchases.
 #
 # Copyright (C) 2011, 2012  Evan Powers
@@ -255,7 +257,7 @@ def cmd_manifest():
                 f.href = row.find(".//a").attrib['href']
                 g.setup.append(f)
             else:
-                f.href = f.href[f.href.index("'")+1 : -1]
+                f.href = f.href[f.href.index('http:') : -1]
                 f.desc = row.find(".//div[@class='sh_o_i_text']/span").text
                 g.extra.append(f)
         games[g.key] = g
