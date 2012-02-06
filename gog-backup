@@ -104,7 +104,7 @@ def request(url, args=None, range=None, hide=False):
 
 def load_attrdicts(fn):
     try:
-        with open(fn, 'r') as r:
+        with open(fn, 'rU') as r:
             ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
         return eval(ad)
     except IOError:
@@ -216,7 +216,8 @@ def needed(valid, games, missing, corrupt):
             print
 
 def open_notrunc(name, bufsize=4*1024):
-    fd = os.open(name, os.O_WRONLY | os.O_CREAT, 0666)
+    # 'w+' includes O_TRUNC, 'r+' lacks O_CREAT; so, roll my own
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_BINARY, 0666)
     return os.fdopen(fd, 'wb', bufsize)
 
 def cmd_login(email, passwd):
@@ -385,7 +386,7 @@ def cmd_fetch():
         while not work.empty():
             _, (f, start, end, path) = work.get()
             try:
-                with open_notrunc(path, 4*1024) as out:
+                with open_notrunc(path) as out:
                     out.seek(start)
                     se = start, end
                     with request(f.href, range=se, hide=True) as page:
