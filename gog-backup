@@ -219,7 +219,8 @@ def needed(valid, games, missing, corrupt):
 
 def open_notrunc(name, bufsize=4*1024):
     # 'w+' includes O_TRUNC, 'r+' lacks O_CREAT; so, roll my own
-    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_BINARY, 0666)
+    bin = os.O_BINARY if hasattr(os, 'O_BINARY') else 0  # for Windows
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | bin, 0666)
     return os.fdopen(fd, 'wb', bufsize)
 
 def cmd_login(email, passwd):
