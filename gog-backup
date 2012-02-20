@@ -51,6 +51,7 @@ import sys, os, optparse, contextlib, pprint, hashlib, zipfile
 import cookielib, urllib, urllib2, urlparse
 import xml.etree.ElementTree
 import threading, Queue, time
+import StringIO
 
 import html5lib  # http://code.google.com/p/html5lib/
 
@@ -86,7 +87,8 @@ class AttrDict(dict):
     def __setattr__(self, key, val):
         self[key] = val
 
-def request(url, args=None, range=None, hide=False):
+def _request(url, args, range, read, hide):
+    pg = AttrDict()
     if not hide:
         print '>', url,
         sys.stdout.flush()
@@ -95,14 +97,35 @@ def request(url, args=None, range=None, hide=False):
     req = urllib2.Request(url, data=args)
     if range is not None:
         req.add_header('Range', 'bytes=%d-%d' % range)
-    page = opener.open(req)
+    pg.page = opener.open(req)
+    pg.url_before = req.get_full_url()
+    pg.url_after = pg.page.geturl()
+    pg.code = pg.page.getcode()
+    if 'content-range' in pg.page.headers:
+        pg.content_range = pg.page.headers['content-range']
+    if read:
+        with contextlib.closing(pg.page) as page:
+            pg.page = page.read()
     if not hide:
-        print '[%d]' % page.getcode()
-    assert 200 <= page.getcode() < 300
-    if page.geturl().endswith('/login') and url != LOGIN:
+        print '[%d]' % pg.code
+    assert 200 <= pg.code < 300
+    if pg.url_after.endswith('/login') and url != LOGIN:
         # must have been redirected to a login page
         raise RuntimeError('login required')
-    return contextlib.closing(page)
+    return pg
+
+def request(url, args=None, html=True, hide=False):
+    pg = _request(url, args, None, True, hide)
+    if html:
+        etree = parser.parse(pg.page)
+    else:
+        sio = StringIO.StringIO(pg.page)
+        etree = xml.etree.ElementTree.parse(sio).getroot()
+    return etree
+
+def stream(url, args=None, range=None, hide=False):
+    pg = _request(url, args, range, False, hide)
+    return contextlib.closing(pg)
 
 def load_attrdicts(fn):
     try:
@@ -226,9 +249,8 @@ def open_notrunc(name, bufsize=4*1024):
     return os.fdopen(fd, 'wb', bufsize)
 
 def cmd_login(email, passwd):
-    with request(LOGIN, args={'log_email': email,
-                              'log_password': passwd}) as page:
-        etree = parser.parse(page)
+    etree = request(LOGIN, args={'log_email': email,
+                                 'log_password': passwd})
     if etree.find(".//div[@id='register_holder']") is not None:
         # this element is only present if not logged in
         raise RuntimeError('login failed')
@@ -237,10 +259,11 @@ def cmd_login(email, passwd):
 def cmd_manifest():
     games = {}
 
+    list_et = request(LIST)
+    shelf_et = request(SHELF)
+
     # parse game list and available files for each from list page
-    with request(LIST) as page:
-        etree = parser.parse(page)
-    for game in etree.findall(".//div[@class='tab_1_row']"):
+    for game in list_et.findall(".//div[@class='tab_1_row']"):
         gamecard = game.find(".//div[@class='tab_1_title']/a")
         if gamecard is None:
             # happens with "Colin McRae Rally 2005", among others
@@ -266,9 +289,7 @@ def cmd_manifest():
         games[g.key] = g
 
     # match games to covers on the shelf page
-    with request(SHELF) as page:
-        etree = parser.parse(page)
-    for game in etree.findall(".//div[@class='shelf_item_h']"):
+    for game in shelf_et.findall(".//div[@class='shelf_item_h']"):
         gamecard = game.find(".//div[@class='shelf_ov_tab_2_title']/a")
         if gamecard is not None:
             g = games[gamecard.attrib['href'].split('/')[-1]]
@@ -280,14 +301,13 @@ def cmd_manifest():
     # - the chunk MD5s for setup files (from the corresponding XML)
     for g in games.values():
         for i, f in enumerate(g.setup + g.extra):
-            with request(f.href, range=(0, 0)) as page:
-                f.size = int(page.headers['Content-Range'].split('/')[-1])
-                f.name = urlparse.urlparse(page.geturl()).path.split('/')[-1]
+            with stream(f.href, range=(0, 0)) as page:
+                f.size = int(page.content_range.split('/')[-1])
+                f.name = urlparse.urlparse(page.url_after).path.split('/')[-1]
                 if i < len(g.setup):
-                    f.url = page.geturl()
+                    f.url = page.url_after
         for f in g.setup:
-            with request(f.url.replace('?', '.xml?'), hide=True) as page:
-                etree = xml.etree.ElementTree.parse(page).getroot()
+            etree = request(f.url.replace('?', '.xml?'), html=False, hide=True)
             del f['url']
             assert f.name == etree.attrib['name']
             assert f.size == int(etree.attrib['total_size'])
@@ -311,9 +331,10 @@ def cmd_manifest():
             path = pathmap.get(g.key, g.key)
             ext = os.path.splitext(href)[-1]
             fn = '%s_%s%s' % (g.key, which, ext)
-            with request(href) as page:
-                with open(os.path.join(path, fn), 'wb') as w:
-                    w.write(page.read())
+            with stream(href) as page:
+                data = page.read()
+            with open(os.path.join(path, fn), 'wb') as w:
+                w.write(data)
         for g in games.values():
             fetch('cover', g)
             fetch('thumb', g)
@@ -394,8 +415,8 @@ def cmd_fetch():
                 with open_notrunc(path) as out:
                     out.seek(start)
                     se = start, end
-                    with request(f.href, range=se, hide=True) as page:
-                        hdr = page.headers['Content-Range'].split()[-1]
+                    with stream(f.href, range=se, hide=True) as page:
+                        hdr = page.content_range.split()[-1]
                         assert hdr == '%d-%d/%d' % (start, end, f.size)
                         assert out.tell() == start
                         ioloop(tid, path, page, out)
