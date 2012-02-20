@@ -51,7 +51,7 @@ import sys, os, optparse, contextlib, pprint, hashlib, zipfile
 import cookielib, urllib, urllib2, urlparse
 import xml.etree.ElementTree
 import threading, Queue, time
-import StringIO
+import StringIO, traceback
 
 import html5lib  # http://code.google.com/p/html5lib/
 
@@ -75,9 +75,13 @@ cookieproc = urllib2.HTTPCookieProcessor(cookiejar)
 opener = urllib2.build_opener(cookieproc)
 treebuilder = html5lib.treebuilders.getTreeBuilder('etree')
 parser = html5lib.HTMLParser(tree=treebuilder, namespaceHTMLElements=False)
+debugmode = None
 
 useragent = 'gog-backup/%s (%s)' % (__version__, __url__)
 opener.addheaders = [('User-agent', useragent)]
+
+class DebugPage(Exception):
+    pass
 
 class AttrDict(dict):
     def __init__(self, **kw):
@@ -87,25 +91,86 @@ class AttrDict(dict):
     def __setattr__(self, key, val):
         self[key] = val
 
+class Page(AttrDict):
+    def read(self, size):
+        if self.page is True:
+            raise DebugPage(self.url)
+        return self.page.read(size)
+    def close(self):
+        if self.page is not True:
+            self.page.close()
+
+def debug_load(fn):
+    debugdata = {}
+    with zipfile.ZipFile(fn, 'r') as r:
+        with r.open('log.py', 'rU') as log:
+            log = eval(log.read())
+        for dbk, dbv in log:
+            if isinstance(dbv, dict):
+                pg = Page(**dbv)
+                if isinstance(pg.page, str):
+                    pg.page = r.read(pg.page)
+                assert dbk not in debugdata
+                debugdata[dbk] = pg
+    return debugdata
+
+def debug(code, *dbv, **kw):
+    if debugmode is None:
+        return Page()
+    dbk = tuple([code] + sorted(kw.items()))
+    if isinstance(debugmode, str):
+        if code == 'REQUEST':
+            assert not dbv
+            dbv = Page(**kw)
+        else:
+            assert not kw
+        debugdata.append((dbk, dbv))
+        return dbv
+    else:
+        if code == 'REQUEST':
+            return debugdata[dbk]
+        elif code == 'TRACEBACK':
+            import pdb
+            pdb.post_mortem()
+
+def debug_save():
+    if isinstance(debugmode, str):
+        with zipfile.ZipFile(debugmode, 'w') as w:
+            for i, (dbk, dbv) in enumerate(debugdata):
+                fn = '%d.txt' % i
+                if dbk[0] == 'REQUEST':
+                    if isinstance(dbv.page, str):
+                        w.writestr(fn, dbv.page)
+                        dbv.page = fn
+                    else:
+                        dbv.page = True
+                elif dbk[0] == 'TRACEBACK':
+                    w.writestr(fn, dbv[0])
+                    debugdata[i] = (dbk, (fn,) + dbv[1:])
+            w.writestr('log.py', pprint.pformat(debugdata))
+
 def _request(url, args, range, read, hide):
-    pg = AttrDict()
+    pg = debug('REQUEST', url=url, args=args, range=range)
     if not hide:
         print '>', url,
         sys.stdout.flush()
-    if args is not None:
-        args = urllib.urlencode(args)
-    req = urllib2.Request(url, data=args)
-    if range is not None:
-        req.add_header('Range', 'bytes=%d-%d' % range)
-    pg.page = opener.open(req)
-    pg.url_before = req.get_full_url()
-    pg.url_after = pg.page.geturl()
-    pg.code = pg.page.getcode()
-    if 'content-range' in pg.page.headers:
-        pg.content_range = pg.page.headers['content-range']
-    if read:
-        with contextlib.closing(pg.page) as page:
-            pg.page = page.read()
+    if debugmode is not True:
+        if args is not None:
+            args = urllib.urlencode(args)
+        req = urllib2.Request(url, data=args)
+        if range is not None:
+            req.add_header('Range', 'bytes=%d-%d' % range)
+        pg.page = opener.open(req)
+        pg.url_before = req.get_full_url()
+        pg.url_after = pg.page.geturl()
+        pg.code = pg.page.getcode()
+        if 'content-range' in pg.page.headers:
+            pg.content_range = pg.page.headers['content-range']
+        pg.headers = dict((k, v) for k, v in pg.page.headers.items()
+                          if k != 'set-cookie')  # (only for debug)
+        if read:
+            with contextlib.closing(pg.page) as page:
+                pg.page = page.read()
     if not hide:
         print '[%d]' % pg.code
     assert 200 <= pg.code < 300
@@ -259,6 +324,7 @@ def cmd_login(email, passwd):
 def cmd_manifest():
     games = {}
 
+    # requests up front so we have them all in debug mode
     list_et = request(LIST)
     shelf_et = request(SHELF)
 
@@ -331,10 +397,13 @@ def cmd_manifest():
             path = pathmap.get(g.key, g.key)
             ext = os.path.splitext(href)[-1]
             fn = '%s_%s%s' % (g.key, which, ext)
-            with stream(href) as page:
-                data = page.read()
-            with open(os.path.join(path, fn), 'wb') as w:
-                w.write(data)
+            try:
+                with stream(href) as page:
+                    data = page.read()
+                with open(os.path.join(path, fn), 'wb') as w:
+                    w.write(data)
+            except DebugPage:
+                pass
         for g in games.values():
             fetch('cover', g)
             fetch('thumb', g)
@@ -425,6 +494,8 @@ def cmd_fetch():
                 with lock:
                     print >>sys.stderr, '!', path
                     errors.setdefault(path, []).append(e)
+            except DebugPage:
+                pass
             work.task_done()
 
     # detailed progress report
@@ -475,7 +546,31 @@ def main(args):
     parser = Parser(prog=arg0, usage=usage[0],
                     epilog='\n'.join(usage[1:]),
                     version='%prog version ' + __version__)
+    parser.add_option('--debug', action='store', metavar='ZIPFILE',
+                      help='generate a HTTP request log')
+    parser.add_option('--replay', action='store', metavar='ZIPFILE',
+                      help='replay an existing HTTP request log')
     opts, args = parser.parse_args()
+    if opts.debug and opts.replay:
+        parser.error('options --debug and --replay are mutually exclusive')
+
+    # configure debugging mode
+    global debugmode, debugdata
+    if opts.debug:
+        debugmode = opts.debug
+        debugdata = []
+    if opts.replay:
+        debugmode = True
+        debugdata = debug_load(opts.replay)
+
+    # capture system information
+    debug('PYTHON', {'version': sys.version,
+                     'platform': sys.platform,
+                     'encoding': sys.getdefaultencoding(),
+                     'filesystem': sys.getfilesystemencoding()})
+    debug('VERSIONS', {'python': sys.version_info,
+                       'html5lib': html5lib.__version__,
+                       'gog-backup': __version__})
 
     # switch to backup directory
     os.chdir(BACKUPINTO)
@@ -497,10 +592,12 @@ def main(args):
 
     # dispatch to subcommand handler
     try:
-        fn = globals()['cmd_' + args[0]]
+        debug('INVOCATION', args[0], opts)
     except IndexError:
         print >>sys.stderr, '%s: missing command' % arg0
         return 10
+    try:
+        fn = globals()['cmd_' + args[0]]
     except KeyError:
         print >>sys.stderr, '%s: invalid command %r' % (arg0, args[0])
         return 10
@@ -517,4 +614,10 @@ def main(args):
     return 0
 
 if __name__ == '__main__':
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Exception:
+        debug('TRACEBACK', traceback.format_exc())
+        raise
+    finally:
+        debug_save()
