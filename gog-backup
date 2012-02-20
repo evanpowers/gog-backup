@@ -18,9 +18,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Usage: %s [--version] [--help] <command> [<args>]
+"""Usage: %prog [options] <command> [<args>]
 
-Possible commands:
+Commands:
 
   login <email> <password>
     Login to GOG.com using the supplied email and password.
@@ -47,7 +47,7 @@ __author__ = 'Evan Powers'
 __version__ = '1.0'
 __url__ = 'https://github.com/evanpowers/gog-backup'
 
-import sys, os, contextlib, pprint, hashlib, zipfile
+import sys, os, optparse, contextlib, pprint, hashlib, zipfile
 import cookielib, urllib, urllib2, urlparse
 import xml.etree.ElementTree
 import threading, Queue, time
@@ -447,17 +447,16 @@ def cmd_fetch():
 def main(args):
     arg0 = sys.argv[0]
 
-    # check for options
-    for opt in args:
-        if not opt.startswith('-'):
-            break
-        if opt == '--help':
-            print __doc__ % arg0
-            return 0
-        if opt == '--version':
-            print 'gog-backup version', __version__
-            return 0
+    class Parser(optparse.OptionParser):
+        def format_epilog(self, formatter):
+            return self.epilog + '\n'
+    usage = __doc__.splitlines()
+    parser = Parser(prog=arg0, usage=usage[0],
+                    epilog='\n'.join(usage[1:]),
+                    version='%prog version ' + __version__)
+    opts, args = parser.parse_args()
 
+    # switch to backup directory
     os.chdir(BACKUPINTO)
 
     # load saved cookies, if any
@@ -477,13 +476,15 @@ def main(args):
 
     # dispatch to subcommand handler
     try:
-        globals()['cmd_' + args[0]](*args[1:])
+        fn = globals()['cmd_' + args[0]]
     except IndexError:
         print >>sys.stderr, '%s: missing command' % arg0
         return 10
     except KeyError:
         print >>sys.stderr, '%s: invalid command %r' % (arg0, args[0])
         return 10
+    try:
+        fn(*args[1:])
     except TypeError, e:
         msg = e.message.replace('cmd_%s()' % args[0], repr(args[0]))
         print >>sys.stderr, '%s: %s' % (arg0, msg)
