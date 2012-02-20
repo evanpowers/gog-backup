@@ -149,11 +149,23 @@ def debug_save():
                     debugdata[i] = (dbk, (fn,) + dbv[1:])
             w.writestr('log.py', pprint.pformat(debugdata))
 
+def msg(*args, **kw):
+    nl = kw.pop('nl', True)
+    fo = kw.pop('fo', sys.stdout)
+    assert not kw
+    txt = (u' '.join(args)).encode(sys.getdefaultencoding(), 'replace')
+    fo.write(txt + ('\n' if nl else ' '))
+    if not nl:
+        fo.flush()
+
+def err(*args, **kw):
+    kw['fo'] = sys.stderr
+    msg(*args, **kw)
+
 def _request(url, args, range, read, hide):
     pg = debug('REQUEST', url=url, args=args, range=range)
     if not hide:
-        print '>', url,
-        sys.stdout.flush()
+        msg('>', url, nl=False)
     if debugmode is not True:
         if args is not None:
             args = urllib.urlencode(args)
@@ -172,7 +184,7 @@ def _request(url, args, range, read, hide):
             with contextlib.closing(pg.page) as page:
                 pg.page = page.read()
     if not hide:
-        print '[%d]' % pg.code
+        msg('[%d]' % pg.code)
     assert 200 <= pg.code < 300
     if pg.url_after.endswith('/login') and url != LOGIN:
         # must have been redirected to a login page
@@ -207,7 +219,7 @@ def locate(g, f):
     return path
 
 def md5map(f, path):
-    print '#', path
+    msg('#', path)
     H = hashlib.md5()
     part = []
     with open(path, 'rb') as r:
@@ -226,16 +238,16 @@ def md5map(f, path):
     eq = f.md5 == H.hexdigest()
     if (eq and part) or (not eq and not part):
         # happens with "The Witcher: Enhanced Edition"
-        print 'NOTE: error in chunk XML for %s?!' % (f.name,)
-        print '    GOG.com must have (had?) a bug somewhere. Known examples'
-        print '    are harmless. You can ignore this message if no bad'
-        print '    chunks are listed below.'
-        print '    %s != %s' % (f.md5, H.hexdigest())
-        print '    bad chunks: %r' % (part,)
+        msg('NOTE: error in chunk XML for %s?!' % (f.name,))
+        msg('    GOG.com must have (had?) a bug somewhere. Known examples')
+        msg('    are harmless. You can ignore this message if no bad')
+        msg('    chunks are listed below.')
+        msg('    %s != %s' % (f.md5, H.hexdigest()))
+        msg('    bad chunks: %r' % (part,))
     return part
 
 def zipmap(f, path):
-    print '&', path
+    msg('&', path)
     part = []
     with zipfile.ZipFile(path, 'r') as r:
         if r.testzip() is not None:
@@ -299,13 +311,13 @@ def needed(valid, games, missing, corrupt):
         return sum(e + 1 - s for s, e in v.need)
     for txt, lst in (('~corrupt', corrupt), ('-missing', missing)):
         mb = megs(sum(need(g, f) for g, f in lst))
-        print '%d files are %s (%s):' % (len(lst), txt[1:], mb)
+        msg('%d files are %s (%s):' % (len(lst), txt[1:], mb))
         for g, f in lst:
             pcent = 100.0 * need(g, f) / f.size
-            print txt[0], f.name,
+            msg(txt[0], f.name, nl=False)
             if pcent < 100:
-                print '\t(%s, %d%%)' % (megs(need(g, f)), pcent),
-            print
+                msg('\t(%s, %d%%)' % (megs(need(g, f)), pcent), nl=False)
+            msg()
 
 def open_notrunc(name, bufsize=4*1024):
     # 'w+' includes O_TRUNC, 'r+' lacks O_CREAT; so, roll my own
@@ -334,8 +346,8 @@ def cmd_manifest():
         if gamecard is None:
             # happens with "Colin McRae Rally 2005", among others
             g = game.find(".//div[@class='tab_1_title']/span")
-            print 'WARNING: no gamecard link for %s?!' % (g.text,)
-            print '    Did GOG.com stop selling this game?'
+            msg('WARNING: no gamecard link for %s?!' % (g.text,))
+            msg('    Did GOG.com stop selling this game?')
             continue
         g = AttrDict()
         g.key = gamecard.attrib['href'].split('/')[-1]
@@ -417,10 +429,10 @@ def cmd_list():
         ssz = sum(f.size for f in g.setup)
         esz = sum(f.size for f in g.extra)
         total += ssz + esz
-        print '%s (%s)' % (g.key, g.title)
-        print '    %8s in %d setup files' % (megs(ssz), len(g.setup))
-        print '    %8s in %d extras' % (megs(esz), len(g.extra))
-    print '%d games, a total of %s' % (len(games), megs(total))
+        msg('%s (%s)' % (g.key, g.title))
+        msg('    %8s in %d setup files' % (megs(ssz), len(g.setup)))
+        msg('    %8s in %d extras' % (megs(esz), len(g.extra)))
+    msg('%d games, a total of %s' % (len(games), megs(total)))
 
 def cmd_compare():
     # start the comparison from scratch
@@ -492,7 +504,7 @@ def cmd_fetch():
                         assert out.tell() == end + 1
             except IOError, e:
                 with lock:
-                    print >>sys.stderr, '!', path
+                    err('!', path)
                     errors.setdefault(path, []).append(e)
             except DebugPage:
                 pass
@@ -502,16 +514,16 @@ def cmd_fetch():
     def progress():
         with lock:
             left = sum(sizes.values())
-            print
+            msg()
             for path, flowrates in sorted(rates.items()):
                 flows = {}
                 for tid, (sz, t) in flowrates:
                     szs, ts = flows.get(tid, (0, 0))
                     flows[tid] = sz + szs, t + ts
                 bps = sum(szs/ts for szs, ts in flows.values() if ts > 0)
-                print '%10s %8.1fK/s %2dx  %s' % \
-                    (megs(sizes[path]), bps / 1000.0, len(flows), path)
-            print megs(left), 'remaining'
+                msg('%10s %8.1fK/s %2dx  %s' %
+                    (megs(sizes[path]), bps / 1000.0, len(flows), path))
+            msg(megs(left), 'remaining')
             rates.clear()
 
     # process work items with a thread pool
@@ -529,11 +541,11 @@ def cmd_fetch():
     except:
         with lock:
             if errors:
-                print >>sys.stderr, len(errors), 'files had errors:'
+                err(len(errors), 'files had errors:')
             for path in errors:
-                print >>sys.stderr, '!', path
+                err('!', path)
                 for e in errors[path]:
-                    print >>sys.stderr, '\t', e
+                    err('\t', e)
         raise
 
 def main(args):
@@ -594,21 +606,21 @@ def main(args):
     try:
         debug('INVOCATION', args[0], opts)
     except IndexError:
-        print >>sys.stderr, '%s: missing command' % arg0
+        err('%s: missing command' % arg0)
         return 10
     try:
         fn = globals()['cmd_' + args[0]]
     except KeyError:
-        print >>sys.stderr, '%s: invalid command %r' % (arg0, args[0])
+        err('%s: invalid command %r' % (arg0, args[0]))
         return 10
     try:
         fn(*args[1:])
     except TypeError, e:
         msg = e.message.replace('cmd_%s()' % args[0], repr(args[0]))
-        print >>sys.stderr, '%s: %s' % (arg0, msg)
+        err('%s: %s' % (arg0, msg))
         return 10
     except RuntimeError, e:
-        print >>sys.stderr, '%s: %s' % (arg0, e.message)
+        err('%s: %s' % (arg0, e.message))
         return 1
 
     return 0
