@@ -138,8 +138,10 @@ def md5map(f, path):
     eq = f.md5 == H.hexdigest()
     if (eq and part) or (not eq and not part):
         # happens with "The Witcher: Enhanced Edition"
-        print 'WARNING: error in chunk XML for %s?!' % (f.name,)
-        print '    GOG.com must have a bug somewhere.'
+        print 'NOTE: error in chunk XML for %s?!' % (f.name,)
+        print '    GOG.com must have (had?) a bug somewhere. Known examples'
+        print '    are harmless. You can ignore this message if no bad'
+        print '    chunks are listed below.'
         print '    %s != %s' % (f.md5, H.hexdigest())
         print '    bad chunks: %r' % (part,)
     return part
