@@ -75,7 +75,6 @@ cookieproc = urllib2.HTTPCookieProcessor(cookiejar)
 opener = urllib2.build_opener(cookieproc)
 treebuilder = html5lib.treebuilders.getTreeBuilder('etree')
 parser = html5lib.HTMLParser(tree=treebuilder, namespaceHTMLElements=False)
-debugmode = None
 
 useragent = 'gog-backup/%s (%s)' % (__version__, __url__)
 opener.addheaders = [('User-agent', useragent)]
@@ -100,54 +99,62 @@ class Page(AttrDict):
         if self.page is not True:
             self.page.close()
 
-def debug_load(fn):
-    debugdata = {}
-    with zipfile.ZipFile(fn, 'r') as r:
-        with r.open('log.py', 'rU') as log:
-            log = eval(log.read())
-        for dbk, dbv in log:
-            if isinstance(dbv, dict):
-                pg = Page(**dbv)
-                if isinstance(pg.page, str):
-                    pg.page = r.read(pg.page)
-                assert dbk not in debugdata
-                debugdata[dbk] = pg
-    return debugdata
+class Debugger(object):
+    def __init__(self, fn, mode):
+        self.fn, self.mode = fn, mode
+        self.data = {None: None, 'w': [], 'r': {}}[mode]
 
-def debug(code, *dbv, **kw):
-    if debugmode is None:
-        return Page()
-    dbk = tuple([code] + sorted(kw.items()))
-    if isinstance(debugmode, str):
-        if code == 'REQUEST':
-            assert not dbv
-            dbv = Page(**kw)
+    def __enter__(self):
+        if self.mode:
+            self.zf = zipfile.ZipFile(self.fn, self.mode)
+        if self.mode == 'r':
+            with self.zf.open('log.py', 'rU') as log:
+                log = eval(log.read())
+            for dbk, dbv in log:
+                if isinstance(dbv, dict):
+                    pg = Page(**dbv)
+                    if isinstance(pg.page, str):
+                        pg.page = self.zf.read(pg.page)
+                    assert dbk not in self.data
+                    self.data[dbk] = pg
+        return self
+
+    def __call__(self, code, *dbv, **kw):
+        dbk = tuple([code] + sorted(kw.items()))
+        if self.mode == 'w':
+            if code == 'REQUEST':
+                assert not dbv
+                dbv = Page(**kw)
+            else:
+                assert not kw
+            self.data.append((dbk, dbv))
+            return dbv
+        elif self.mode == 'r':
+            if code == 'REQUEST':
+                return self.data[dbk]
+            elif code == 'TRACEBACK':
+                import pdb
+                pdb.post_mortem()
         else:
-            assert not kw
-        debugdata.append((dbk, dbv))
-        return dbv
-    else:
-        if code == 'REQUEST':
-            return debugdata[dbk]
-        elif code == 'TRACEBACK':
-            import pdb
-            pdb.post_mortem()
+            return Page()
 
-def debug_save():
-    if isinstance(debugmode, str):
-        with zipfile.ZipFile(debugmode, 'w') as w:
-            for i, (dbk, dbv) in enumerate(debugdata):
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.mode == 'w':
+            for i, (dbk, dbv) in enumerate(self.data):
                 fn = '%d.txt' % i
                 if dbk[0] == 'REQUEST':
                     if isinstance(dbv.page, str):
-                        w.writestr(fn, dbv.page)
+                        self.zf.writestr(fn, dbv.page)
                         dbv.page = fn
                     else:
                         dbv.page = True
                 elif dbk[0] == 'TRACEBACK':
-                    w.writestr(fn, dbv[0])
-                    debugdata[i] = (dbk, (fn,) + dbv[1:])
-            w.writestr('log.py', pprint.pformat(debugdata))
+                    self.zf.writestr(fn, dbv[0])
+                    self.data[i] = (dbk, (fn,) + dbv[1:])
+            self.zf.writestr('log.py', pprint.pformat(self.data))
+        if self.mode:
+            self.zf.close()
+        return False
 
 def msg(*args, **kw):
     nl = kw.pop('nl', True)
@@ -166,7 +173,7 @@ def _request(url, args, range, read, hide):
     pg = debug('REQUEST', url=url, args=args, range=range)
     if not hide:
         msg('>', url, nl=False)
-    if debugmode is not True:
+    if debug.mode != 'r':
         if args is not None:
             args = urllib.urlencode(args)
         req = urllib2.Request(url, data=args)
@@ -179,7 +186,7 @@ def _request(url, args, range, read, hide):
         if 'content-range' in pg.page.headers:
             pg.content_range = pg.page.headers['content-range']
         pg.headers = dict((k, v) for k, v in pg.page.headers.items()
-                          if k != 'set-cookie')  # (only for debug)
+                          if k != 'set-cookie')  #  only for debug
         if read:
             with contextlib.closing(pg.page) as page:
                 pg.page = page.read()
@@ -548,33 +555,7 @@ def cmd_fetch():
                     err('\t', e)
         raise
 
-def main(args):
-    arg0 = sys.argv[0]
-
-    class Parser(optparse.OptionParser):
-        def format_epilog(self, formatter):
-            return self.epilog + '\n'
-    usage = __doc__.splitlines()
-    parser = Parser(prog=arg0, usage=usage[0],
-                    epilog='\n'.join(usage[1:]),
-                    version='%prog version ' + __version__)
-    parser.add_option('--debug', action='store', metavar='ZIPFILE',
-                      help='generate a HTTP request log')
-    parser.add_option('--replay', action='store', metavar='ZIPFILE',
-                      help='replay an existing HTTP request log')
-    opts, args = parser.parse_args()
-    if opts.debug and opts.replay:
-        parser.error('options --debug and --replay are mutually exclusive')
-
-    # configure debugging mode
-    global debugmode, debugdata
-    if opts.debug:
-        debugmode = opts.debug
-        debugdata = []
-    if opts.replay:
-        debugmode = True
-        debugdata = debug_load(opts.replay)
-
+def dispatch(arg0, args, opts):
     # capture system information
     debug('PYTHON', {'version': sys.version,
                      'platform': sys.platform,
@@ -625,11 +606,37 @@ def main(args):
 
     return 0
 
+def main(args):
+    arg0 = sys.argv[0]
+
+    class Parser(optparse.OptionParser):
+        def format_epilog(self, formatter):
+            return self.epilog + '\n'
+    usage = __doc__.splitlines()
+    parser = Parser(prog=arg0, usage=usage[0],
+                    epilog='\n'.join(usage[1:]),
+                    version='%prog version ' + __version__)
+    parser.add_option('--debug', action='store', metavar='ZIPFILE',
+                      help='generate a HTTP request log')
+    parser.add_option('--replay', action='store', metavar='ZIPFILE',
+                      help='replay an existing HTTP request log')
+    opts, args = parser.parse_args()
+
+    if opts.debug and opts.replay:
+        parser.error('options --debug and --replay are mutually exclusive')
+
+    global debug
+    mode = None
+    if opts.debug:
+        mode = 'w'
+    if opts.replay:
+        mode = 'r'
+    with Debugger(opts.debug or opts.replay, mode) as debug:
+        try:
+            return dispatch(arg0, args, opts)
+        except Exception:
+            debug('TRACEBACK', traceback.format_exc())
+            raise
+
 if __name__ == '__main__':
-    try:
-        sys.exit(main(sys.argv[1:]))
-    except Exception:
-        debug('TRACEBACK', traceback.format_exc())
-        raise
-    finally:
-        debug_save()
+    sys.exit(main(sys.argv[1:]))
