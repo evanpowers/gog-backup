@@ -176,7 +176,7 @@ def _request(url, args, range, read, hide):
     if debug.mode != 'r':
         if args is not None:
             args = urllib.urlencode(args)
-        req = urllib2.Request(url, data=args)
+        req = urllib2.Request(url.encode('utf-8'), data=args)
         if range is not None:
             req.add_header('Range', 'bytes=%d-%d' % range)
         pg.page = opener.open(req)
