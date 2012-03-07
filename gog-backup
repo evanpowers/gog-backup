@@ -169,6 +169,11 @@ def err(*args, **kw):
     kw['fo'] = sys.stderr
     msg(*args, **kw)
 
+def gamekey(gamecard):
+    return ''.join(c for c in gamecard.attrib['href'].split('/')[-1] \
+                       .encode('ascii', 'ignore')
+                   if c.isalnum() or c == '_')
+
 def _request(url, args, range, read, hide):
     pg = debug('REQUEST', url=url, args=args, range=range)
     if not hide:
@@ -359,9 +364,7 @@ def cmd_manifest():
             msg('    Did GOG.com stop selling this game?')
             continue
         g = AttrDict()
-        g.key = ''.join(c for c in gamecard.attrib['href'].split('/')[-1] \
-                            .encode('ascii', 'ignore')
-                        if c.isalnum() or c == '_')
+        g.key = gamekey(gamecard)
         g.title = gamecard.text
         g.thumb = THUMB + game.find(".//img[@src]").attrib['src']
         g.setup, g.extra = [], []
@@ -381,7 +384,7 @@ def cmd_manifest():
     for game in shelf_et.findall(".//div[@class='shelf_item_h']"):
         gamecard = game.find(".//div[@class='shelf_ov_tab_2_title']/a")
         if gamecard is not None:
-            g = games[gamecard.attrib['href'].split('/')[-1]]
+            g = games[gamekey(gamecard)]
             g.cover = THUMB + game.find(".//img[@src]").attrib['src']
 
     # request a zero-length range from each file to determine
