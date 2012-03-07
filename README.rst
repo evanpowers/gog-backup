@@ -102,11 +102,16 @@ with this.
 For an overview of command line syntax and the supported sub-commands,
 run ``gog-backup --help``.
 
-* ``login <email> <password>``
+* ``login <email> [password]``
 
-  Logs in to GOG.com using the supplied email and password, then saves
-  the authentication cookie to disk for use during subsequent
-  invocations. Neither the email nor password themselves are saved.
+  Logs in to GOG.com using the supplied email and password, prompting
+  for the latter if it is omitted, then saves the authentication
+  cookie to disk for use during subsequent invocations. Neither the
+  email nor password themselves are saved.
+
+  While convienient for scripts, be aware that supplying your password
+  on the command line may reveal it to other logged in users (it will
+  appear in the output of ``ps``, for example).
 
 * ``manifest``
 
@@ -220,10 +225,6 @@ bugs and limitations include:
   will not be re-downloaded. For example, if GOG.com updates an extra
   in a way that does not affect the file's length, ``gog-backup`` will
   be unable to detect this.
-
-* Passing the account password on the command line is a classic
-  security flaw on multi-user machines—users can see each other's
-  processes, and the command lines used to invoke those processes.
 
 
 Alternatives

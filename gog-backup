@@ -18,11 +18,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Usage: %prog [options] <command> [<args>]
+"""Usage: %prog [options] <command> [args...]
 
 Commands:
 
-  login <email> <password>
+  login <email> [password]
     Login to GOG.com using the supplied email and password.
 
   manifest
@@ -47,7 +47,7 @@ __author__ = 'Evan Powers'
 __version__ = '1.0'
 __url__ = 'https://github.com/evanpowers/gog-backup'
 
-import sys, os, optparse, contextlib, pprint, hashlib, zipfile
+import sys, os, optparse, contextlib, pprint, hashlib, zipfile, getpass
 import cookielib, urllib, urllib2, urlparse
 import xml.etree.ElementTree
 import threading, Queue, time
@@ -332,7 +332,9 @@ def open_notrunc(name, bufsize=4*1024):
     fd = os.open(name, os.O_WRONLY | os.O_CREAT | bin, 0666)
     return os.fdopen(fd, 'wb', bufsize)
 
-def cmd_login(email, passwd):
+def cmd_login(email, passwd=None):
+    if passwd is None:
+        passwd = getpass.getpass()
     etree = request(LOGIN, args={'log_email': email,
                                  'log_password': passwd})
     if etree.find(".//div[@id='register_holder']") is not None:
